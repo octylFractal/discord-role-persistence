@@ -129,7 +129,10 @@ client.on('message', message => {
         return;
     }
     if (!isAdminDm(message)) {
-        replyMessage(message, `Oh hai ${message.author.username}!`);
+        if (message.channel.type === 'dm') {
+            // bonus treats
+            replyMessage(message, `Oh hai ${message.author.username}!`);
+        }
         return;
     }
     const text = message.content;
