@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import Discord, {Guild, GuildMember, Message} from "discord.js";
+import Discord, {Guild, GuildMember, Message, Snowflake} from "discord.js";
 import {getAdmins, getRoleMapppings, getToken, getUserRoles, setRoleMapping, setUserRoles} from "./db";
 
 const client = new Discord.Client();
@@ -16,6 +16,27 @@ function setRolesFromGuildMember(member: GuildMember) {
         name: r.name
     })));
     setUserRoles(member.user.id, member.guild.id, roles.map(r => r.id));
+}
+
+function applyRole(member: GuildMember, roleId: Snowflake): Promise<void> {
+    const memTag = getMemTag(member);
+    const roleMap = getRoleMapppings(member.guild.id);
+    if (roleMap && roleMap[roleId]) {
+        console.log(memTag, 'Mapping role', roleId, 'to', roleMap[roleId]);
+        roleId = roleMap[roleId];
+    }
+    let roleObj = member.guild.roles.get(roleId);
+    // exclude dropped roles, @everyone, non-existent roles, and managed roles.
+    if (roleId === '0' || roleId === member.guild.id || typeof roleObj === "undefined" || roleObj.managed) {
+        console.log(memTag, 'Dropping role', roleId);
+        return Promise.reject('role dropped');
+    }
+    return member.addRole(roleId, 'role-persistence: user joined, adding saved roles.')
+        .then(() => console.log(memTag, 'Applied', roleId))
+        .catch(err => {
+            console.error(memTag, 'Failed to add role:', err);
+            throw err;
+        });
 }
 
 function onJoinGuild(guild: Guild) {
@@ -39,21 +60,9 @@ client.on('guildMemberAdd', member => {
         return;
     }
     console.log(memTag, 'Found some roles, applying...');
-    const roleMap = getRoleMapppings(member.guild.id);
     roles.forEach(r => {
-        if (roleMap[r]) {
-            console.log(memTag, 'Mapping role', r, 'to', roleMap[r]);
-            r = roleMap[r];
-        }
-        let roleObj = member.guild.roles.get(r);
-        // exclude dropped roles, @everyone, non-existent roles, and managed roles.
-        if (r === '0' || r === member.guild.id || typeof roleObj === "undefined" || roleObj.managed) {
-            console.log(memTag, 'Dropping role', r);
-            return;
-        }
-        member.addRole(r, 'role-persistence: user joined, adding saved roles.')
-            .then(() => console.log(memTag, 'Applied', r))
-            .catch(err => console.error(memTag, 'Failed to add role:', err));
+        applyRole(member, r)
+            .then();
     });
 });
 
@@ -113,6 +122,37 @@ const commands: { [k: string]: Command } = {
         }
         replyMessage(message, 'Roles:');
         replyMessage(message, guild.roles.sort((a, b) => a.name.localeCompare(b.name)).map(r => `${r.name} (${r.id})`).join('\n'));
+    },
+    gibrole(message: Message, argv: string[]) {
+        // gibrole [gid] [uid] [roles...]
+        if (argv.length <= 3) {
+            replyMessage(message, "Error: 3 arguments required.");
+            return;
+        }
+        const [gid, uid, ...roleIds] = argv.slice(1);
+        const guild = client.guilds.get(gid);
+        if (typeof guild === "undefined") {
+            replyMessage(message, "Error: bot does not exist in guild");
+            return;
+        }
+        const roles = guild.roles;
+        for (const r of roleIds) {
+            if (!roles.has(r)) {
+                replyMessage(message, `Warning: role ${r} not found in guild.`);
+                return;
+            }
+        }
+
+        const member = guild.member(uid);
+        if (typeof member === "undefined") {
+            replyMessage(message, `Error: unknown user ${uid}.`)
+        }
+
+        for (const r of roleIds) {
+            applyRole(member, r)
+                .then(() => replyMessage(message, `Applied role ${r}.`))
+                .catch(err => replyMessage(message, `Couldn't apply ${r}: ${err}`));
+        }
     },
     help(message) {
         replyMessage(message, 'Commands:');
