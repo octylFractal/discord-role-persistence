@@ -17,7 +17,7 @@ function getMemTag(member: GuildMember) {
     return `[${member.id}:${member.user.username}@${member.guild.id}:${member.guild.name}]`;
 }
 
-function setRolesFromGuildMember(member: GuildMember) {
+function guildMemberUpdate(member: GuildMember) {
     const memTag = getMemTag(member);
     const roles = member.roles.array();
     console.log(memTag, 'Saving roles:', roles.map(r => ({
@@ -25,6 +25,9 @@ function setRolesFromGuildMember(member: GuildMember) {
         name: r.name
     })));
     setUserRoles(member.user.id, member.guild.id, roles.map(r => r.id));
+
+    console.log(memTag, 'Saving name:', member.nickname);
+    setUserName(member.user.id, member.guild.id, member.nickname);
 }
 
 function applyRole(member: GuildMember, roleId: Snowflake): Promise<void> {
@@ -49,7 +52,7 @@ function applyRole(member: GuildMember, roleId: Snowflake): Promise<void> {
 }
 
 function onJoinGuild(guild: Guild) {
-    guild.members.forEach(m => setRolesFromGuildMember(m));
+    guild.members.forEach(m => guildMemberUpdate(m));
 }
 
 client.on('ready', () => {
@@ -102,8 +105,7 @@ client.on('guildMemberAdd', member => {
 });
 
 client.on('guildMemberUpdate', (old, member) => {
-    setRolesFromGuildMember(member);
-    setUserName(member.user.id, member.guild.id, member.nickname);
+    guildMemberUpdate(member);
 });
 
 function isAdminDm(message: Message) {
