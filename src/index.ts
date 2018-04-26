@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-import Discord, {Guild, GuildMember, Message, Permissions, Snowflake} from "discord.js";
+import Discord, {Guild, GuildMember, Message, Snowflake} from "discord.js";
 import {
     getAdmins,
+    getProcessing,
     getRoleMapppings,
     getToken,
     getUserName,
     getUserRoles,
+    setProcessing,
     setRoleMapping,
     setUserName,
     setUserRoles
@@ -19,6 +21,11 @@ function getMemTag(member: GuildMember) {
 
 function guildMemberUpdate(member: GuildMember) {
     const memTag = getMemTag(member);
+    if (getProcessing(member.user.id, member.guild.id)) {
+        console.log(memTag, 'Processing member, skipping updates...');
+        return;
+    }
+
     const roles = member.roles.array();
     console.log(memTag, 'Saving roles:', roles.map(r => ({
         id: r.id,
@@ -62,32 +69,34 @@ client.on('ready', () => {
 
 client.on('guildCreate', guild => onJoinGuild(guild));
 
-function onAddRoles(member: GuildMember) {
+function onAddRoles(member: GuildMember): Promise<any> {
     const memTag = getMemTag(member);
     const roles = getUserRoles(member.user.id, member.guild.id);
     if (!roles) {
         console.log(memTag, 'No roles detected.');
-        return;
+        return Promise.resolve();
     }
     console.log(memTag, 'Found some roles, applying...');
-    roles.forEach(r => {
-        applyRole(member, r)
-            .then(() => {}, () => {});
-    });
+    return Promise.all(roles.map(r => {
+        return applyRole(member, r)
+            .then(() => {
+            }, () => {
+            });
+    }));
 }
 
-function onAddName(member: GuildMember) {
+function onAddName(member: GuildMember): Promise<void> {
     if (!member.guild.member(client.user.id).hasPermission('MANAGE_NICKNAMES')) {
-        return;
+        return Promise.resolve();
     }
     const memTag = getMemTag(member);
     const name = getUserName(member.user.id, member.guild.id);
     if (!name) {
         console.log(memTag, 'No name detected.');
-        return;
+        return Promise.resolve();
     }
     console.log(memTag, 'Found a name, applying...');
-    member.setNickname(name, 'role-persistence: user joined, adding saved name')
+    return member.setNickname(name, 'role-persistence: user joined, adding saved name')
         .then(() => {
             console.log(memTag, "Applied name!");
         })
@@ -96,12 +105,21 @@ function onAddName(member: GuildMember) {
         });
 }
 
+function processAddMember(member: GuildMember) {
+    setProcessing(member.user.id, member.guild.id, true);
+
+    const promises: Promise<any>[] = [];
+    promises.push.apply(promises, onAddRoles(member));
+    promises.push(onAddName(member));
+
+    Promise.all(promises)
+        .then(() => setProcessing(member.user.id, member.guild.id, false));
+}
+
 client.on('guildMemberAdd', member => {
     const memTag = getMemTag(member);
     console.log(memTag, 'Joined guild.');
-
-    onAddRoles(member);
-    onAddName(member);
+    processAddMember(member);
 });
 
 client.on('guildMemberUpdate', (old, member) => {

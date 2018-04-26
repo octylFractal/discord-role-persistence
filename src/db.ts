@@ -10,6 +10,7 @@ db.defaults({
     roleMap: {},
     roleMappings: {},
     nameMap: {},
+    procMap: {},
     admins: [],
     token: ''
 }).write();
@@ -28,6 +29,14 @@ export function setUserName(uid: Snowflake, gid: Snowflake, name: string) {
 
 export function getUserName(uid: Snowflake, gid: Snowflake): string | undefined {
     return db.get(['nameMap', gid, uid]).value();
+}
+
+export function setProcessing(uid: Snowflake, gid: Snowflake, processing: boolean) {
+    db.set(['procMap', gid, uid], processing).write();
+}
+
+export function getProcessing(uid: Snowflake, gid: Snowflake): boolean {
+    return !!db.get(['procMap', gid, uid]).value();
 }
 
 export function setRoleMapping(gid: Snowflake, fromId: Snowflake, toId: Snowflake) {
