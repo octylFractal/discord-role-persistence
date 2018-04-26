@@ -9,6 +9,7 @@ const db = lowdb(adapter);
 db.defaults({
     roleMap: {},
     roleMappings: {},
+    nameMap: {},
     admins: [],
     token: ''
 }).write();
@@ -19,6 +20,14 @@ export function setUserRoles(uid: Snowflake, gid: Snowflake, roles: Snowflake[])
 
 export function getUserRoles(uid: Snowflake, gid: Snowflake): Snowflake[] {
     return db.get(['roleMap', gid, uid]).value();
+}
+
+export function setUserName(uid: Snowflake, gid: Snowflake, name: string) {
+    db.set(['nameMap', gid, uid], name).write();
+}
+
+export function getUserName(uid: Snowflake, gid: Snowflake): string | undefined {
+    return db.get(['nameMap', gid, uid]).value();
 }
 
 export function setRoleMapping(gid: Snowflake, fromId: Snowflake, toId: Snowflake) {

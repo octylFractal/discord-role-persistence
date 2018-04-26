@@ -1,6 +1,15 @@
 #!/usr/bin/env node
-import Discord, {Guild, GuildMember, Message, Snowflake} from "discord.js";
-import {getAdmins, getRoleMapppings, getToken, getUserRoles, setRoleMapping, setUserRoles} from "./db";
+import Discord, {Guild, GuildMember, Message, Permissions, Snowflake} from "discord.js";
+import {
+    getAdmins,
+    getRoleMapppings,
+    getToken,
+    getUserName,
+    getUserRoles,
+    setRoleMapping,
+    setUserName,
+    setUserRoles
+} from "./db";
 
 const client = new Discord.Client();
 
@@ -50,10 +59,8 @@ client.on('ready', () => {
 
 client.on('guildCreate', guild => onJoinGuild(guild));
 
-client.on('guildMemberAdd', member => {
+function onAddRoles(member: GuildMember) {
     const memTag = getMemTag(member);
-    console.log(memTag, 'Joined guild.');
-
     const roles = getUserRoles(member.user.id, member.guild.id);
     if (!roles) {
         console.log(memTag, 'No roles detected.');
@@ -62,12 +69,41 @@ client.on('guildMemberAdd', member => {
     console.log(memTag, 'Found some roles, applying...');
     roles.forEach(r => {
         applyRole(member, r)
-            .then();
+            .then(() => {}, () => {});
     });
+}
+
+function onAddName(member: GuildMember) {
+    if (!member.guild.member(client.user.id).hasPermission('MANAGE_NICKNAMES')) {
+        return;
+    }
+    const memTag = getMemTag(member);
+    const name = getUserName(member.user.id, member.guild.id);
+    if (!name) {
+        console.log(memTag, 'No name detected.');
+        return;
+    }
+    console.log(memTag, 'Found a name, applying...');
+    member.setNickname(name, 'role-persistence: user joined, adding saved name')
+        .then(() => {
+            console.log(memTag, "Applied name!");
+        })
+        .catch(err => {
+            console.log(memTag, "Failed to apply name", err);
+        });
+}
+
+client.on('guildMemberAdd', member => {
+    const memTag = getMemTag(member);
+    console.log(memTag, 'Joined guild.');
+
+    onAddRoles(member);
+    onAddName(member);
 });
 
 client.on('guildMemberUpdate', (old, member) => {
     setRolesFromGuildMember(member);
+    setUserName(member.user.id, member.guild.id, member.nickname);
 });
 
 function isAdminDm(message: Message) {
