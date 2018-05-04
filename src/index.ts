@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 import Discord, {Guild, GuildMember, Message, Snowflake} from "discord.js";
 import {
-    getAdmins,
+    addPingName,
+    getAdmins, getPingNames,
     getProcessing,
     getRoleMapppings,
     getToken,
     getUserName,
-    getUserRoles,
+    getUserRoles, remPingName,
     setProcessing,
     setRoleMapping,
     setUserName,
@@ -210,6 +211,26 @@ const commands: { [k: string]: Command } = {
                 .catch(err => replyMessage(message, `Couldn't apply ${r}: ${err}`));
         }
     },
+    pingName(message, argv) {
+        // pingName <add|remove> <name>
+        if (argv.length <= 2) {
+            replyMessage(message, "Error: 2 arguments required.");
+            return;
+        }
+        const [action, name] = argv.slice(1);
+        switch (action) {
+            case 'add':
+                addPingName(name);
+                replyMessage(message, `Added ${name}.`);
+                break;
+            case 'remove':
+                remPingName(name);
+                replyMessage(message, `Removed ${name}.`);
+                break;
+            default:
+                replyMessage(message, `Error: unknown action ${action}.`);
+        }
+    },
     help(message) {
         replyMessage(message, 'Commands:');
         for (let k of Object.keys(commands)) {
@@ -228,6 +249,19 @@ client.on('message', message => {
         if (message.channel.type === 'dm') {
             // bonus treats
             replyMessage(message, `Oh hai ${message.author.username}!`);
+            return;
+        }
+        if (message.channel.type === "text") {
+            if (!message.member.hasPermission('MENTION_EVERYONE', false, true, true)) {
+                return;
+            }
+            const pingRoles = getPingNames();
+            const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0);
+            if (matches) {
+                message.channel
+                    .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
+                    .catch(err => console.error("Error @everyone'in", err));
+            }
         }
         return;
     }

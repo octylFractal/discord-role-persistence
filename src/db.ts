@@ -12,8 +12,28 @@ db.defaults({
     nameMap: {},
     procMap: {},
     admins: [],
-    token: ''
+    token: '',
+    pingNames: []
 }).write();
+
+export function getPingNames(): string[] {
+    return db.get('pingNames').value();
+}
+
+export function setPingNames(names: string[]) {
+    db.set('pingNames', names).write();
+}
+
+export function addPingName(name: string) {
+    const pushTarget = getPingNames().slice();
+    pushTarget.push(name);
+    setPingNames(pushTarget);
+}
+
+export function remPingName(name: string) {
+    const remTarget = getPingNames().filter(x => x != name);
+    setPingNames(remTarget);
+}
 
 export function setUserRoles(uid: Snowflake, gid: Snowflake, roles: Snowflake[]) {
     db.set(['roleMap', gid, uid], roles).write();
