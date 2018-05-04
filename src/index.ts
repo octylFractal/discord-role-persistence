@@ -239,6 +239,89 @@ const commands: { [k: string]: Command } = {
     }
 };
 
+enum InterpretState {
+    NORMAL,
+    S_QUOTE,
+    D_QUOTE
+}
+
+function interpret(cmd: string): string[] {
+    const cmdPoints = Array.from(cmd);
+    const parts: string[] = [];
+
+    let partBuilder: string[] = [];
+    let state: InterpretState = InterpretState.NORMAL;
+    let i = 0;
+    while (i < cmdPoints.length) {
+        const cp = cmdPoints[i];
+        i++;
+        switch (state) {
+            case InterpretState.NORMAL:
+                switch (cp) {
+                    case ' ':
+                        parts.push(partBuilder.join(''));
+                        partBuilder = [];
+                        break;
+                    case "'":
+                        state = InterpretState.S_QUOTE;
+                        break;
+                    case '"':
+                        state = InterpretState.D_QUOTE;
+                        break;
+                    default:
+                        partBuilder.push(cp);
+                }
+                break;
+            case InterpretState.S_QUOTE:
+                switch (cp) {
+                    case '\\':
+                        if (cmdPoints[i + 1] === "'") {
+                            partBuilder.push("'");
+                            i++;
+                        } else {
+                            partBuilder.push('\\');
+                        }
+                        break;
+                    case "'":
+                        state = InterpretState.NORMAL;
+                        break;
+                    default:
+                        partBuilder.push(cp);
+                }
+                break;
+            case InterpretState.D_QUOTE:
+                switch (cp) {
+                    case '\\':
+                        if (cmdPoints[i + 1] === '"') {
+                            partBuilder.push('"');
+                            i++;
+                        } else {
+                            partBuilder.push('\\');
+                        }
+                        break;
+                    case '"':
+                        state = InterpretState.NORMAL;
+                        break;
+                    default:
+                        partBuilder.push(cp);
+                }
+                break;
+        }
+    }
+
+    switch (state) {
+        case InterpretState.NORMAL:
+            if (partBuilder.length) {
+                parts.push(partBuilder.join(''));
+            }
+            break;
+        case InterpretState.S_QUOTE:
+        case InterpretState.D_QUOTE:
+            throw new Error("Missing quote.");
+    }
+
+    return parts;
+}
 
 client.on('message', message => {
     if (message.author.id === client.user.id) {
@@ -256,8 +339,9 @@ client.on('message', message => {
                 return;
             }
             const pingRoles = getPingNames();
-            const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0);
-            if (matches) {
+            const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0)
+                .filter(r => r.members.has(client.user.id));
+            if (matches.length) {
                 message.channel
                     .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
                     .catch(err => console.error("Error @everyone'in", err));
@@ -270,7 +354,7 @@ client.on('message', message => {
         replyMessage(message, `Good day, mistress ${message.author.username}.`);
         return;
     }
-    const argv = text.substring(1).split(' ');
+    const argv = interpret(text.substring(1));
     console.log('EXEC', argv);
     const cmd = commands[argv[0]];
     if (typeof cmd === "undefined") {
