@@ -300,9 +300,8 @@ function validateCommand(cmd: Command, argv: string[], message: Message): boolea
     }
 }
 
-export function runCommand(message: Message, admin: boolean, commands: CommandStore) {
-    const text = message.content;
-    const argv = interpret(text.replace(COMMAND_PREFIX, ''));
+export function runCommand(message: Message, commandText: string, admin: boolean, commands: CommandStore) {
+    const argv = interpret(commandText);
     const memTag = message.channel.type == 'text'
         ? getMemTag(message.member)
         : `[${message.author.id}:${message.author.username}]`;

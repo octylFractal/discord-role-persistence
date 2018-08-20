@@ -101,14 +101,27 @@ client.on('guildMemberUpdate', (old, member) => {
 
 
 const commands = createCommands(client);
+const CMD_START_RE = /^[a-zA-Z]/;
+
+function tryExecuteCommand(message: Message, commandText: string): boolean {
+    // validate post-prefix message
+    const potentialCommand = commandText.substring(COMMAND_PREFIX.length);
+    if (!CMD_START_RE.test(potentialCommand)) {
+        // not a command, abort!
+        return false;
+    }
+    runCommand(message, potentialCommand, getAdmins().indexOf(message.author.id) >= 0, commands);
+    return true;
+}
 
 client.on('message', message => {
     if (message.author.id === client.user.id) {
         // don't reply-self
         return;
     }
-    if (message.content.startsWith(COMMAND_PREFIX)) {
-        runCommand(message, getAdmins().indexOf(message.author.id) >= 0, commands);
+    const text = message.content;
+    if (text.startsWith(COMMAND_PREFIX) && tryExecuteCommand(message, text)) {
+        return;
     } else if (message.channel.type === 'dm') {
         // bonus treats
         sendMessage(message.channel, `Oh hai ${message.author.username}!`);
@@ -118,8 +131,9 @@ client.on('message', message => {
             return;
         }
         const pingRoles = getPingNames();
-        const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0)
-            .filter(r => r.members.has(client.user.id));
+        const matches = message.mentions.roles.filter(r => pingRoles.indexOf(r.name) >= 0)
+            .filter(r => r.members.has(client.user.id))
+            .array();
         if (matches.length) {
             message.channel
                 .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
