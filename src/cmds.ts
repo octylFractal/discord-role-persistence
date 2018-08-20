@@ -5,6 +5,8 @@ import {Client, Message, PartialTextBasedChannelFields, StringResolvable} from "
 import {applyRole, getMemTag} from "./dbwrap";
 import moment = require("moment-timezone");
 
+export const COMMAND_PREFIX = '.';
+
 export function replyMessage(message: Message, reply: string) {
     message.reply(reply)
         .catch(err => console.warn('Error sending reply', err));
@@ -266,7 +268,7 @@ export function createCommands(client: Client): CommandStore {
                     if (cmd.requiresAdmin && !isAdmin) {
                         continue;
                     }
-                    let cmdDesc = `\`!${k} ${cmd.description.describe()}\``;
+                    let cmdDesc = `\`${COMMAND_PREFIX}${k} ${cmd.description.describe()}\``;
                     if (cmd.requiresAdmin) {
                         cmdDesc += ` -- requires ${client.user.username} admin!`
                     }
@@ -300,7 +302,7 @@ function validateCommand(cmd: Command, argv: string[], message: Message): boolea
 
 export function runCommand(message: Message, admin: boolean, commands: CommandStore) {
     const text = message.content;
-    const argv = interpret(text.substring(1));
+    const argv = interpret(text.replace(COMMAND_PREFIX, ''));
     const memTag = message.channel.type == 'text'
         ? getMemTag(message.member)
         : `[${message.author.id}:${message.author.username}]`;

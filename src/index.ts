@@ -25,7 +25,7 @@ import {
 import {CommandDescription, desc, descriptions, interpret, OPTIONAL} from "./cmdsupport";
 import {dedent} from "./stringsupport";
 import moment = require("moment-timezone");
-import {createCommands, replyMessage, runCommand, sendMessage} from "./cmds";
+import {COMMAND_PREFIX, createCommands, replyMessage, runCommand, sendMessage} from "./cmds";
 import {applyRole, getMemTag, guildMemberUpdate} from "./dbwrap";
 
 const client = new Discord.Client();
@@ -107,7 +107,7 @@ client.on('message', message => {
         // don't reply-self
         return;
     }
-    if (message.content.startsWith('!')) {
+    if (message.content.startsWith(COMMAND_PREFIX)) {
         runCommand(message, getAdmins().indexOf(message.author.id) >= 0, commands);
     } else if (message.channel.type === 'dm') {
         // bonus treats
