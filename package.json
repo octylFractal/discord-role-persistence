@@ -9,14 +9,18 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@types/lowdb": "^1.0.0",
-    "discord.js": "^11.3.2",
+    "@types/lodash": "^4.14.116",
+    "@types/lowdb": "^1.0.5",
+    "@types/moment-timezone": "^0.5.8",
+    "bufferutil": "^3.0.5",
+    "discord.js": "^11.4.2",
     "erlpack": "github:hammerandchisel/erlpack",
+    "lodash": "^4.17.10",
     "lowdb": "^1.0.0",
-    "typescript": "^2.8.1",
-    "uws": "^9.147.0"
+    "moment-timezone": "^0.5.21",
+    "typescript": "^3.0.1"
   },
   "devDependencies": {
-    "@types/node": "^9.6.5"
+    "@types/node": "^10.7.1"
   }
 }

@@ -1,63 +1,35 @@
 #!/usr/bin/env node
-import Discord, {Guild, GuildMember, Message, Snowflake} from "discord.js";
+import Discord, {
+    Guild,
+    GuildMember,
+    Message,
+    PartialTextBasedChannelFields,
+    Snowflake,
+    StringResolvable
+} from "discord.js";
 import {
     addPingName,
-    getAdmins, getPingNames,
+    getAdmins,
+    getPingNames,
     getProcessing,
     getRoleMapppings,
     getToken,
     getUserName,
-    getUserRoles, remPingName,
+    getUserRoles,
+    remPingName,
     setProcessing,
     setRoleMapping,
     setUserName,
     setUserRoles
 } from "./db";
+import {CommandDescription, desc, descriptions, interpret, OPTIONAL} from "./cmdsupport";
+import {dedent} from "./stringsupport";
+import moment = require("moment-timezone");
+import {createCommands, replyMessage, runCommand, sendMessage} from "./cmds";
+import {applyRole, getMemTag, guildMemberUpdate} from "./dbwrap";
 
 const client = new Discord.Client();
 
-function getMemTag(member: GuildMember) {
-    return `[${member.id}:${member.user.username}@${member.guild.id}:${member.guild.name}]`;
-}
-
-function guildMemberUpdate(member: GuildMember) {
-    const memTag = getMemTag(member);
-    if (getProcessing(member.user.id, member.guild.id)) {
-        console.log(memTag, 'Processing member, skipping updates...');
-        return;
-    }
-
-    const roles = member.roles.array();
-    console.log(memTag, 'Saving roles:', roles.map(r => ({
-        id: r.id,
-        name: r.name
-    })));
-    setUserRoles(member.user.id, member.guild.id, roles.map(r => r.id));
-
-    console.log(memTag, 'Saving name:', member.nickname);
-    setUserName(member.user.id, member.guild.id, member.nickname);
-}
-
-function applyRole(member: GuildMember, roleId: Snowflake): Promise<void> {
-    const memTag = getMemTag(member);
-    const roleMap = getRoleMapppings(member.guild.id);
-    if (roleMap && roleMap[roleId]) {
-        console.log(memTag, 'Mapping role', roleId, 'to', roleMap[roleId]);
-        roleId = roleMap[roleId];
-    }
-    let roleObj = member.guild.roles.get(roleId);
-    // exclude dropped roles, @everyone, non-existent roles, and managed roles.
-    if (roleId === '0' || roleId === member.guild.id || typeof roleObj === "undefined" || roleObj.managed) {
-        console.log(memTag, 'Dropping role', roleId);
-        return Promise.reject('role dropped');
-    }
-    return member.addRole(roleId, 'role-persistence: user joined, adding saved roles.')
-        .then(() => console.log(memTag, 'Applied', roleId))
-        .catch(err => {
-            console.error(memTag, 'Failed to add role:', err);
-            throw err;
-        });
-}
 
 function onJoinGuild(guild: Guild) {
     guild.members.forEach(m => guildMemberUpdate(m));
@@ -127,241 +99,33 @@ client.on('guildMemberUpdate', (old, member) => {
     guildMemberUpdate(member);
 });
 
-function isAdminDm(message: Message) {
-    return message.channel.type === 'dm' && getAdmins().indexOf(message.author.id) >= 0;
-}
 
-function replyMessage(message: Message, reply: string) {
-    message.reply(reply)
-        .catch(err => console.warn('Error sending reply', err));
-}
-
-type Command = (message: Message, argv: string[]) => void;
-
-const commands: { [k: string]: Command } = {
-    maprole(message: Message, argv: string[]) {
-        if (argv.length <= 3) {
-            replyMessage(message, 'Error: 3 arguments required.');
-            return;
-        }
-        const [gid, from, to] = argv.slice(1);
-        const guild = client.guilds.get(gid);
-        if (typeof guild === "undefined") {
-            replyMessage(message, "Error: bot does not exist in guild");
-            return;
-        }
-        const roles = guild.roles;
-        if (!roles.has(from)) {
-            replyMessage(message, "Error: `from` role does not exist in guild");
-            return;
-        }
-        if (!roles.has(to) && to !== '0') {
-            replyMessage(message, "Error: `to` role does not exist in guild");
-            return;
-        }
-        setRoleMapping(gid, from, to);
-        replyMessage(message, "Mapped roles successfully!");
-    },
-    guilds(message: Message) {
-        replyMessage(message, 'Guilds:');
-        replyMessage(message, client.guilds.sort((a, b) => a.name.localeCompare(b.name)).map(g => `${g.name} (${g.id})`).join('\n'));
-    },
-    roles(message: Message, argv) {
-        if (argv.length <= 1) {
-            replyMessage(message, "Error: 1 argument required.");
-            return;
-        }
-        const gid = argv[1];
-        const guild = client.guilds.get(gid);
-        if (typeof guild === "undefined") {
-            replyMessage(message, "Error: bot does not exist in guild");
-            return;
-        }
-        replyMessage(message, 'Roles:');
-        replyMessage(message, guild.roles.sort((a, b) => a.name.localeCompare(b.name)).map(r => `${r.name} (${r.id})`).join('\n'));
-    },
-    gibrole(message: Message, argv: string[]) {
-        // gibrole [gid] [uid] [roles...]
-        if (argv.length <= 3) {
-            replyMessage(message, "Error: 3 arguments required.");
-            return;
-        }
-        const [gid, uid, ...roleIds] = argv.slice(1);
-        const guild = client.guilds.get(gid);
-        if (typeof guild === "undefined") {
-            replyMessage(message, "Error: bot does not exist in guild");
-            return;
-        }
-        const roles = guild.roles;
-        for (const r of roleIds) {
-            if (!roles.has(r)) {
-                replyMessage(message, `Warning: role ${r} not found in guild.`);
-                return;
-            }
-        }
-
-        const member = guild.member(uid);
-        if (typeof member === "undefined") {
-            replyMessage(message, `Error: unknown user ${uid}.`)
-        }
-
-        for (const r of roleIds) {
-            applyRole(member, r)
-                .then(() => replyMessage(message, `Applied role ${r}.`))
-                .catch(err => replyMessage(message, `Couldn't apply ${r}: ${err}`));
-        }
-    },
-    pingName(message, argv) {
-        // pingName <add|remove> <name>
-        if (argv.length <= 2) {
-            replyMessage(message, "Error: 2 arguments required.");
-            return;
-        }
-        const [action, name] = argv.slice(1);
-        switch (action) {
-            case 'add':
-                addPingName(name);
-                replyMessage(message, `Added ${name}.`);
-                break;
-            case 'remove':
-                remPingName(name);
-                replyMessage(message, `Removed ${name}.`);
-                break;
-            default:
-                replyMessage(message, `Error: unknown action ${action}.`);
-        }
-    },
-    help(message) {
-        replyMessage(message, 'Commands:');
-        for (let k of Object.keys(commands)) {
-            replyMessage(message, '!' + k);
-        }
-    }
-};
-
-enum InterpretState {
-    NORMAL,
-    S_QUOTE,
-    D_QUOTE
-}
-
-function interpret(cmd: string): string[] {
-    const cmdPoints = Array.from(cmd);
-    const parts: string[] = [];
-
-    let partBuilder: string[] = [];
-    let state: InterpretState = InterpretState.NORMAL;
-    let i = 0;
-    while (i < cmdPoints.length) {
-        const cp = cmdPoints[i];
-        i++;
-        switch (state) {
-            case InterpretState.NORMAL:
-                switch (cp) {
-                    case ' ':
-                        parts.push(partBuilder.join(''));
-                        partBuilder = [];
-                        break;
-                    case "'":
-                        state = InterpretState.S_QUOTE;
-                        break;
-                    case '"':
-                        state = InterpretState.D_QUOTE;
-                        break;
-                    default:
-                        partBuilder.push(cp);
-                }
-                break;
-            case InterpretState.S_QUOTE:
-                switch (cp) {
-                    case '\\':
-                        if (cmdPoints[i + 1] === "'") {
-                            partBuilder.push("'");
-                            i++;
-                        } else {
-                            partBuilder.push('\\');
-                        }
-                        break;
-                    case "'":
-                        state = InterpretState.NORMAL;
-                        break;
-                    default:
-                        partBuilder.push(cp);
-                }
-                break;
-            case InterpretState.D_QUOTE:
-                switch (cp) {
-                    case '\\':
-                        if (cmdPoints[i + 1] === '"') {
-                            partBuilder.push('"');
-                            i++;
-                        } else {
-                            partBuilder.push('\\');
-                        }
-                        break;
-                    case '"':
-                        state = InterpretState.NORMAL;
-                        break;
-                    default:
-                        partBuilder.push(cp);
-                }
-                break;
-        }
-    }
-
-    switch (state) {
-        case InterpretState.NORMAL:
-            if (partBuilder.length) {
-                parts.push(partBuilder.join(''));
-            }
-            break;
-        case InterpretState.S_QUOTE:
-        case InterpretState.D_QUOTE:
-            throw new Error("Missing quote.");
-    }
-
-    return parts;
-}
+const commands = createCommands(client);
 
 client.on('message', message => {
     if (message.author.id === client.user.id) {
         // don't reply-self
         return;
     }
-    if (!isAdminDm(message)) {
-        if (message.channel.type === 'dm') {
-            // bonus treats
-            replyMessage(message, `Oh hai ${message.author.username}!`);
+    if (message.content.startsWith('!')) {
+        runCommand(message, getAdmins().indexOf(message.author.id) >= 0, commands);
+    } else if (message.channel.type === 'dm') {
+        // bonus treats
+        sendMessage(message.channel, `Oh hai ${message.author.username}!`);
+        return;
+    } else if (message.channel.type === "text") {
+        if (!message.member.hasPermission('MENTION_EVERYONE', false, true, true)) {
             return;
         }
-        if (message.channel.type === "text") {
-            if (!message.member.hasPermission('MENTION_EVERYONE', false, true, true)) {
-                return;
-            }
-            const pingRoles = getPingNames();
-            const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0)
-                .filter(r => r.members.has(client.user.id));
-            if (matches.length) {
-                message.channel
-                    .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
-                    .catch(err => console.error("Error @everyone'in", err));
-            }
+        const pingRoles = getPingNames();
+        const matches = message.mentions.roles.filterArray(r => pingRoles.indexOf(r.name) >= 0)
+            .filter(r => r.members.has(client.user.id));
+        if (matches.length) {
+            message.channel
+                .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
+                .catch(err => console.error("Error @everyone'in", err));
         }
-        return;
     }
-    const text = message.content;
-    if (!text.startsWith('!')) {
-        replyMessage(message, `Good day, mistress ${message.author.username}.`);
-        return;
-    }
-    const argv = interpret(text.substring(1));
-    console.log('EXEC', argv);
-    const cmd = commands[argv[0]];
-    if (typeof cmd === "undefined") {
-        replyMessage(message, "Error: unknown command.");
-        return;
-    }
-    cmd(message, argv);
 });
 
 client.login(getToken())
