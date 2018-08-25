@@ -3,6 +3,6 @@
  * @param str - the string to dedent
  */
 export function dedent(str: string): string {
-    const lines = str.split('\n');
+    const lines = str.trim().split('\n');
     return lines.map(line => line.trim()).join('\n');
 }

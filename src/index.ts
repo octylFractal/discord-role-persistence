@@ -1,31 +1,8 @@
 #!/usr/bin/env node
-import Discord, {
-    Guild,
-    GuildMember,
-    Message,
-    PartialTextBasedChannelFields,
-    Snowflake,
-    StringResolvable
-} from "discord.js";
-import {
-    addPingName,
-    getAdmins,
-    getPingNames,
-    getProcessing,
-    getRoleMapppings,
-    getToken,
-    getUserName,
-    getUserRoles,
-    remPingName,
-    setProcessing,
-    setRoleMapping,
-    setUserName,
-    setUserRoles
-} from "./db";
-import {CommandDescription, desc, descriptions, interpret, OPTIONAL} from "./cmdsupport";
-import {dedent} from "./stringsupport";
-import moment = require("moment-timezone");
-import {COMMAND_PREFIX, createCommands, replyMessage, runCommand, sendMessage} from "./cmds";
+import Discord, {Guild, GuildMember, Message} from "discord.js";
+import {getAdmins, getPingNames, getToken, getUserName, getUserRoles, setProcessing} from "./db";
+import {captureInParens, indexOfSubseq} from "./cmdsupport";
+import {COMMAND_PREFIX, createCommands, runCommand, sendMessage} from "./cmds";
 import {applyRole, getMemTag, guildMemberUpdate} from "./dbwrap";
 
 const client = new Discord.Client();
@@ -102,17 +79,86 @@ client.on('guildMemberUpdate', (old, member) => {
 
 const commands = createCommands(client);
 const CMD_START_RE = /^[a-zA-Z]/;
+type CommandsByName = Record<string, string>;
 
-function tryExecuteCommand(message: Message, commandText: string): boolean {
-    // validate post-prefix message
-    const potentialCommand = commandText.substring(COMMAND_PREFIX.length);
-    if (!CMD_START_RE.test(potentialCommand)) {
-        // not a command, abort!
-        return false;
-    }
-    runCommand(message, potentialCommand, getAdmins().indexOf(message.author.id) >= 0, commands);
-    return true;
+function callCommand(message: Message, commandText: string, commandOutput: (msg: string) => void) {
+    runCommand(message,
+        commandText,
+        getAdmins().indexOf(message.author.id) >= 0,
+        commands,
+        commandOutput);
 }
+
+// inline commands format: (@<name>:<PREFIX><COMMAND + ARGS>)
+const INLINE_CMD_START = Array.from("(@");
+
+function extractCommandAtStart(text: string): string | undefined {
+    if (!text.startsWith(COMMAND_PREFIX)) {
+        return undefined;
+    }
+    const command = text.substring(COMMAND_PREFIX.length);
+    return CMD_START_RE.test(command) ? command : undefined;
+}
+
+function extractCommands(text: string): CommandsByName {
+    const cmdAtStart = extractCommandAtStart(text);
+    if (typeof cmdAtStart !== "undefined") {
+        return {'': cmdAtStart};
+    }
+
+    let lastParenIndex = 0;
+    const commands: CommandsByName = {};
+    const textPoints = Array.from(text);
+
+    while (true) {
+        const parenIndex = indexOfSubseq(textPoints, INLINE_CMD_START, lastParenIndex);
+        if (typeof parenIndex === "undefined") {
+            return commands;
+        }
+
+        const parenCap = captureInParens(textPoints, parenIndex);
+        lastParenIndex = parenIndex + 1;
+        if (typeof parenCap === "undefined") {
+            continue;
+        }
+        const indexOfColon = parenCap.indexOf(':');
+        if (indexOfColon < 0) {
+            console.log("No : in", parenCap);
+            continue;
+        }
+        // slice from @ to :
+        const name = parenCap.slice(1, indexOfColon).join('').trim();
+        if (name.length == 0) {
+            console.log("Name too small in", parenCap);
+            continue;
+        }
+        // slice from : to end
+        const commandText = parenCap.slice(indexOfColon + 1).join('').trim();
+        const command = extractCommandAtStart(commandText);
+        if (typeof command === "undefined") {
+            console.log("No command in", commandText, "or", parenCap);
+            continue;
+        }
+        lastParenIndex = parenIndex + parenCap.length + 2;
+        commands[name] = command;
+    }
+}
+
+function execAllCommands(message: Message, commands: CommandsByName) {
+    const replyMessage: String[] = [];
+    for (const cmdName of Object.keys(commands)) {
+        const cmd = commands[cmdName];
+
+        function commandOutput(msg: string) {
+            const fullMessage = cmdName ? `@${cmdName}: ${msg}` : msg;
+            replyMessage.push(fullMessage);
+        }
+
+        callCommand(message, cmd, commandOutput);
+    }
+    sendMessage(message.channel, replyMessage.join('\n'));
+}
+
 
 client.on('message', message => {
     if (message.author.id === client.user.id) {
@@ -120,9 +166,10 @@ client.on('message', message => {
         return;
     }
     const text = message.content;
-    if (text.startsWith(COMMAND_PREFIX) && tryExecuteCommand(message, text)) {
-        return;
-    } else if (message.channel.type === 'dm') {
+    const commands = extractCommands(text);
+    execAllCommands(message, commands);
+    const executedCommands = Object.keys(commands).length > 0;
+    if (!executedCommands && message.channel.type === 'dm') {
         // bonus treats
         sendMessage(message.channel, `Oh hai ${message.author.username}!`);
         return;

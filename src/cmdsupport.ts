@@ -244,3 +244,43 @@ export function interpret(cmd: string): string[] {
 
     return parts;
 }
+
+
+/**
+ * Capture text inside parentheses, with the first one at {@code start}.
+ */
+export function captureInParens(allText: Array<string>, start: number): Array<string> | undefined {
+    let numParens = 1;
+    let index = start + 1;
+
+    for (; index < allText.length; index++) {
+        if (numParens == 0) {
+            break;
+        }
+        if (allText[index] == '(') {
+            numParens++;
+        } else if (allText[index] == ')') {
+            numParens--;
+        }
+    }
+
+    return allText.slice(start + 1, index - 1);
+}
+
+export function indexOfSubseq<T>(array: T[], subseq: T[], from: number): number | undefined {
+    function matchesAll(index: number) {
+        for (let i = 0; i < subseq.length; i++) {
+            if (array[i + index] != subseq[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    for (let index = from; index < (array.length - subseq.length); index++) {
+        if (matchesAll(index)) {
+            return index;
+        }
+    }
+    return undefined;
+}
