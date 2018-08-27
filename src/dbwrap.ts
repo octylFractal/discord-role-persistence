@@ -1,5 +1,5 @@
 import {GuildMember, Snowflake} from "discord.js";
-import {getProcessing, getRoleMapppings, setUserName, setUserRoles} from "./db";
+import {getProcessing, getRoleMapppings, getUnmoderatedRoles, setUserName, setUserRoles} from "./db";
 
 export function getMemTag(member: GuildMember) {
     return `[${member.id}:${member.user.username}@${member.guild.id}:${member.guild.name}]`;
@@ -23,7 +23,31 @@ export function guildMemberUpdate(member: GuildMember) {
     setUserName(member.user.id, member.guild.id, member.nickname);
 }
 
-export function applyRole(member: GuildMember, roleId: Snowflake): Promise<void> {
+export type RoleFilter = (roleId: Snowflake) => boolean;
+
+export function applyRole(member: GuildMember, roleId: Snowflake, reason: string): Promise<void> {
+    const memTag = getMemTag(member);
+
+    return member.addRole(roleId, 'role-persistence: ' + reason)
+        .then(() => console.log(memTag, 'Applied', roleId))
+        .catch(err => {
+            console.error(memTag, 'Failed to add role:', err);
+            throw err;
+        });
+}
+
+export function removeRole(member: GuildMember, roleId: Snowflake, reason: string): Promise<void> {
+    const memTag = getMemTag(member);
+
+    return member.removeRole(roleId, 'role-persistence: ' + reason)
+        .then(() => console.log(memTag, 'Removed', roleId))
+        .catch(err => {
+            console.error(memTag, 'Failed to remove role:', err);
+            throw err;
+        });
+}
+
+export function applyRoleForRejoin(member: GuildMember, roleId: Snowflake): Promise<void> {
     const memTag = getMemTag(member);
     const roleMap = getRoleMapppings(member.guild.id);
     if (roleMap && roleMap[roleId]) {
@@ -31,15 +55,28 @@ export function applyRole(member: GuildMember, roleId: Snowflake): Promise<void>
         roleId = roleMap[roleId];
     }
     let roleObj = member.guild.roles.get(roleId);
-    // exclude dropped roles, @everyone, non-existent roles, and managed roles.
-    if (roleId === '0' || roleId === member.guild.id || typeof roleObj === "undefined" || roleObj.managed) {
+    // exclude these roles:
+    if (
+        // dropped role:
+        roleId === '0'
+        // @everyone role:
+        || roleId === member.guild.id
+        // non-existent role:
+        || typeof roleObj === "undefined"
+        // managed role:
+        || roleObj.managed
+    ) {
         console.log(memTag, 'Dropping role', roleId);
         return Promise.reject('role dropped');
     }
-    return member.addRole(roleId, 'role-persistence: user joined, adding saved roles.')
-        .then(() => console.log(memTag, 'Applied', roleId))
-        .catch(err => {
-            console.error(memTag, 'Failed to add role:', err);
-            throw err;
-        });
+    return applyRole(member, roleId, 'user joined, adding saved roles');
+}
+
+export function getRoleFilter(gid: Snowflake, admin: boolean): RoleFilter {
+    return admin ? () => true : unmoderatedRoleFilter(gid);
+}
+
+export function unmoderatedRoleFilter(gid: Snowflake): RoleFilter {
+    const unmodRoles = new Set(getUnmoderatedRoles(gid));
+    return roleId => unmodRoles.has(roleId);
 }

@@ -1,3 +1,6 @@
+import {Client, Guild, Role, Snowflake, User} from "discord.js";
+import {RoleFilter} from "./dbwrap";
+
 export type RequiredString = 'REQUIRED' | 'OPTIONAL';
 
 export const REQUIRED = 'REQUIRED';
@@ -283,4 +286,64 @@ export function indexOfSubseq<T>(array: T[], subseq: T[], from: number): number 
         }
     }
     return undefined;
+}
+
+export function requireGuild(guild: Guild | undefined, informUser: (msg: string) => void): guild is Guild {
+    if (typeof guild === "undefined") {
+        informUser("Error: a guild context is required for this command");
+        return false;
+    }
+    return true;
+}
+
+export interface ValidateRolesArgs {
+    client: Client,
+    gId: Snowflake,
+    roleIds: Snowflake[],
+    roleFilter?: RoleFilter
+    informUser: UserMessageCallback
+}
+
+export interface ValidRoles {
+    guild: Guild
+    roles: Role[]
+}
+
+export function validateRoles({
+                                  client, gId, roleIds, roleFilter = () => true, informUser
+                              }: ValidateRolesArgs): ValidRoles | undefined {
+    const guild = client.guilds.get(gId);
+    if (typeof guild === "undefined") {
+        informUser("Error: bot does not exist in guild");
+        return undefined;
+    }
+    const roles = guild.roles;
+    const roleOut: Role[] = [];
+    for (const r of roleIds) {
+        const role = roles.get(r);
+        if (typeof role === "undefined" || !roleFilter(r)) {
+            informUser(`Warning: role ${r} not found in guild or not visible.`);
+            return undefined;
+        }
+        roleOut.push(role);
+    }
+    return {guild: guild, roles: roleOut};
+}
+
+export function generateRoleList({roles}: ValidRoles): string {
+    if (roles.length == 0) {
+        return "nothing";
+    }
+    return roles.map(role => `'${role.name}'`).join(", ");
+}
+
+export function undefFilter<T>(t: T | undefined): t is T {
+    return typeof t !== "undefined";
+}
+
+export type PromisedString = string | PromiseLike<string>;
+export type UserMessageCallback = (msg: PromisedString) => void;
+
+export function userHumanId(user: User): string {
+    return `${user.username}#${user.discriminator}`;
 }

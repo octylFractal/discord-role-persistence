@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import Discord, {Guild, GuildMember, Message} from "discord.js";
 import {getAdmins, getPingNames, getToken, getUserName, getUserRoles, setProcessing} from "./db";
-import {captureInParens, indexOfSubseq} from "./cmdsupport";
+import {captureInParens, indexOfSubseq, UserMessageCallback} from "./cmdsupport";
 import {COMMAND_PREFIX, createCommands, runCommand, sendMessage} from "./cmds";
-import {applyRole, getMemTag, guildMemberUpdate} from "./dbwrap";
+import {applyRoleForRejoin, getMemTag, guildMemberUpdate} from "./dbwrap";
 
 const client = new Discord.Client();
 
@@ -28,7 +28,7 @@ function onAddRoles(member: GuildMember): Promise<any> {
     }
     console.log(memTag, 'Found some roles, applying...');
     return Promise.all(roles.map(r => {
-        return applyRole(member, r)
+        return applyRoleForRejoin(member, r)
             .then(() => {
             }, () => {
             });
@@ -81,7 +81,7 @@ const commands = createCommands(client);
 const CMD_START_RE = /^[a-zA-Z]/;
 type CommandsByName = Record<string, string>;
 
-function callCommand(message: Message, commandText: string, commandOutput: (msg: string) => void) {
+function callCommand(message: Message, commandText: string, commandOutput: UserMessageCallback) {
     runCommand(message,
         commandText,
         getAdmins().indexOf(message.author.id) >= 0,
@@ -145,18 +145,25 @@ function extractCommands(text: string): CommandsByName {
 }
 
 function execAllCommands(message: Message, commands: CommandsByName) {
-    const replyMessage: String[] = [];
+    const replyMessage: Promise<string>[] = [];
     for (const cmdName of Object.keys(commands)) {
         const cmd = commands[cmdName];
 
-        function commandOutput(msg: string) {
-            const fullMessage = cmdName ? `@${cmdName}: ${msg}` : msg;
+        const commandOutput: UserMessageCallback = function (msg) {
+            const fullMessage = Promise.resolve(msg)
+                .then(m => cmdName ? `@${cmdName}: ${m}` : m);
             replyMessage.push(fullMessage);
-        }
+        };
 
         callCommand(message, cmd, commandOutput);
     }
-    sendMessage(message.channel, replyMessage.join('\n'));
+    if (replyMessage.length > 0) {
+        Promise.all(replyMessage)
+            .then(messages => {
+                sendMessage(message.channel, messages.join('\n'));
+            })
+            .catch(err => console.error("Error waiting for messages", err));
+    }
 }
 
 

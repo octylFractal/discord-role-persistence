@@ -1,7 +1,21 @@
-import {CommandDescription, desc, descriptions, interpret, OPTIONAL, ValidateState} from "./cmdsupport";
-import {addPingName, remPingName, setRoleMapping} from "./db";
-import {Client, Message, PartialTextBasedChannelFields, StringResolvable} from "discord.js";
-import {applyRole, getMemTag} from "./dbwrap";
+import {
+    CommandDescription,
+    desc,
+    descriptions,
+    generateRoleList,
+    interpret,
+    OPTIONAL,
+    REQUIRED,
+    requireGuild,
+    undefFilter,
+    userHumanId,
+    UserMessageCallback,
+    validateRoles,
+    ValidateState
+} from "./cmdsupport";
+import {addPingName, getUnmoderatedRoles, remPingName, setRoleMapping, setUnmoderatedRoles} from "./db";
+import {Client, Guild, Message, PartialTextBasedChannelFields, Snowflake, StringResolvable} from "discord.js";
+import {applyRole, getMemTag, getRoleFilter, removeRole, unmoderatedRoleFilter} from "./dbwrap";
 import moment = require("moment-timezone");
 
 export const COMMAND_PREFIX = '.';
@@ -84,10 +98,11 @@ function readSourceTime(time: string, sourceArea: TimeArea): moment.Moment {
 
 interface CommandArgs {
     message: Message,
+    guild: Guild | undefined,
     argv: string[],
     isAdmin: boolean,
 
-    informUser(message: string): void
+    informUser: UserMessageCallback
 }
 
 interface Command {
@@ -102,21 +117,92 @@ const FORMAT_ARG_TABLE: Record<string, string> = {
     'am/pm': HUMAN_FORMAT_AM_PM
 };
 
-export type CommandStore = Record<string, Command>;
+type UserContexts = Record<Snowflake, UserContext | undefined>;
+
+export interface CommandStore {
+    commands: Record<string, Command>;
+    userContexts: UserContexts;
+}
+
+export interface UserContext {
+    guildId: Snowflake
+}
+
 
 export function createCommands(client: Client): CommandStore {
-    const commands: CommandStore = {
+    const userContext: Record<Snowflake, UserContext | undefined> = {};
+
+    // shared command implementations:
+    function manageUserRoles({message, guild, argv: [uid, action, ...roleIds], isAdmin, informUser}: CommandArgs) {
+        if (!requireGuild(guild, informUser)) {
+            return;
+        }
+        const validation = validateRoles({
+            client: client,
+            gId: guild.id,
+            roleIds: roleIds,
+            roleFilter: getRoleFilter(guild.id, isAdmin),
+            informUser: informUser
+        });
+        if (typeof validation === "undefined") {
+            return;
+        }
+
+        const member = guild.member(uid);
+        if (typeof member === "undefined") {
+            informUser(`Error: unknown user ${uid}.`)
+        }
+
+        switch (action) {
+            case 'add':
+                for (const r of roleIds) {
+                    const msg = applyRole(member, r, 'user ' + userHumanId(message.author) + ' requested change')
+                        .then(() => `Applied role ${r}.`)
+                        .catch(err => `Couldn't apply ${r}: ${err}`);
+                    informUser(msg);
+                }
+                return;
+            case 'remove':
+                for (const r of roleIds) {
+                    const msg = removeRole(member, r, 'user ' + userHumanId(message.author) + ' requested change')
+                        .then(() => `Removed role ${r}.`)
+                        .catch(err => `Couldn't remove ${r}: ${err}`);
+                    informUser(msg);
+                }
+                return;
+            default:
+                informUser(`Error: unknown action ${action}.`);
+                return;
+        }
+    }
+
+    const commands: Record<string, Command> = {
+        'set-guild-id': {
+            requiresAdmin: false,
+            description: descriptions(
+                desc.r('guildId')
+            ),
+            run({message, argv: [gId], informUser}) {
+                if (!client.guilds.has(gId)) {
+                    informUser("Error: bot is not in that guild.");
+                    return;
+                }
+                const authId = message.author.id;
+                userContext[authId] = {
+                    ...userContext[authId],
+                    guildId: gId
+                };
+                informUser(`Your contextual guild ID is now ${gId}.`);
+            }
+        },
         'map-role': {
             requiresAdmin: true,
             description: descriptions(
-                desc.r('groupId'),
                 desc.r('fromRole'),
                 desc.r('toRole')
             ),
-            run({argv: [gid, from, to], informUser}) {
-                const guild = client.guilds.get(gid);
-                if (typeof guild === "undefined") {
-                    informUser("Error: bot does not exist in guild");
+            run({guild, argv: [from, to], informUser}) {
+                if (!requireGuild(guild, informUser)) {
                     return;
                 }
                 const roles = guild.roles;
@@ -128,7 +214,7 @@ export function createCommands(client: Client): CommandStore {
                     informUser("Error: `to` role does not exist in guild");
                     return;
                 }
-                setRoleMapping(gid, from, to);
+                setRoleMapping(guild.id, from, to);
                 informUser("Mapped roles successfully!");
             }
         },
@@ -137,55 +223,105 @@ export function createCommands(client: Client): CommandStore {
             description: descriptions(),
             run({informUser}) {
                 informUser('Guilds:');
-                informUser(client.guilds.sort((a, b) => a.name.localeCompare(b.name)).map(g => `${g.name} (${g.id})`).join('\n'));
+                informUser(client.guilds
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(g => `${g.name} (${g.id})`)
+                    .join('\n'));
             }
         },
         roles: {
-            requiresAdmin: true,
+            requiresAdmin: false,
             description: descriptions(
-                desc.r('groupId')
             ),
-            run({argv: [gid], informUser}) {
-                const guild = client.guilds.get(gid);
-                if (typeof guild === "undefined") {
-                    informUser("Error: bot does not exist in guild");
+            run({guild, isAdmin, informUser}) {
+                if (!requireGuild(guild, informUser)) {
+                    return;
+                }
+                const roleFilter = isAdmin ? () => true : unmoderatedRoleFilter(guild.id);
+                const filteredRoles = guild.roles
+                    .filter(role => roleFilter(role.id));
+                if (filteredRoles.size == 0) {
+                    informUser('There are no roles visible to you.');
                     return;
                 }
                 informUser('Roles:');
-                informUser(guild.roles.sort((a, b) => a.name.localeCompare(b.name)).map(r => `${r.name} (${r.id})`).join('\n'));
+                const roles = filteredRoles
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(r => `${r.name} (${r.id})`);
+                roles.forEach(informUser);
             }
         },
-        'give-role': {
+        'unmoderated-roles': {
             requiresAdmin: true,
             description: descriptions(
-                desc.r('groupId'),
-                desc.r('userId'),
-                desc.r('roleIds...')
+                desc.c('action', REQUIRED, ['add', 'remove', 'list']),
+                desc.o('roleIds...')
             ),
-            run({argv: [gid, uid, ...roleIds], informUser}) {
-                const guild = client.guilds.get(gid);
-                if (typeof guild === "undefined") {
-                    informUser("Error: bot does not exist in guild");
+            run({guild, argv: [action, ...roleIds], isAdmin, informUser}) {
+                if (!requireGuild(guild, informUser)) {
                     return;
                 }
-                const roles = guild.roles;
-                for (const r of roleIds) {
-                    if (!roles.has(r)) {
-                        informUser(`Warning: role ${r} not found in guild.`);
+                const validation = validateRoles({
+                    client: client,
+                    gId: guild.id,
+                    roleIds: roleIds,
+                    roleFilter: getRoleFilter(guild.id, isAdmin),
+                    informUser: informUser
+                });
+                if (typeof validation === "undefined") {
+                    return;
+                }
+
+                const roleList = generateRoleList(validation);
+                let unmodRoles = getUnmoderatedRoles(guild.id);
+                switch (action) {
+                    case 'add':
+                        unmodRoles = unmodRoles.concat(roleIds);
+                        informUser(`Added ${roleList} to unmoderated roles.`);
+                        break;
+                    case 'remove':
+                        const removeSet = new Set(roleIds);
+                        unmodRoles = unmodRoles.filter(role => removeSet.has(role));
+                        informUser(`Removed ${roleList} from unmoderated roles.`);
+                        break;
+                    case 'list':
+                        informUser(`Current unmoderated roles:`);
+
+                        const roles = unmodRoles
+                            .map(roleId => guild.roles.get(roleId))
+                            .filter(undefFilter)
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map(r => `${r.name} (${r.id})`);
+                        roles.forEach(informUser);
                         return;
-                    }
+                    default:
+                        informUser(`Error: unknown action \`${action}\`.`);
+                        return;
                 }
-
-                const member = guild.member(uid);
-                if (typeof member === "undefined") {
-                    informUser(`Error: unknown user ${uid}.`)
-                }
-
-                for (const r of roleIds) {
-                    applyRole(member, r)
-                        .then(() => informUser(`Applied role ${r}.`))
-                        .catch(err => informUser(`Couldn't apply ${r}: ${err}`));
-                }
+                setUnmoderatedRoles(guild.id, unmodRoles);
+            }
+        },
+        'role-admin': {
+            requiresAdmin: true,
+            description: descriptions(
+                desc.r('userId'),
+                desc.c('action', REQUIRED, ['add', 'remove']),
+                desc.r('roleIds...'),
+            ),
+            run: manageUserRoles
+        },
+        'role': {
+            requiresAdmin: false,
+            description: descriptions(
+                desc.c('action', REQUIRED, ['add', 'remove']),
+                desc.r('roleIds...'),
+            ),
+            run(commandArgs) {
+                const {argv, message} = commandArgs;
+                manageUserRoles({
+                    ...commandArgs,
+                    argv: [message.author.id].concat(argv)
+                });
             }
         },
         'ping-name': {
@@ -271,7 +407,10 @@ export function createCommands(client: Client): CommandStore {
             }
         }
     };
-    return commands;
+    return {
+        commands: commands,
+        userContexts: userContext
+    };
 }
 
 function validateCommand(cmd: Command, {argv, informUser}: CommandArgs): boolean {
@@ -293,19 +432,45 @@ function validateCommand(cmd: Command, {argv, informUser}: CommandArgs): boolean
     }
 }
 
+type ComputeGuildValid = { type?: undefined, guild?: Guild };
+type ComputeGuildError = { type: "error", error: string };
+
+function computeGuild(userCtxs: UserContexts, message: Message): ComputeGuildValid | ComputeGuildError {
+    switch (message.channel.type) {
+        case 'dm':
+        case 'group':
+            const ctx = userCtxs[message.author.id];
+            if (typeof ctx === "undefined") {
+                return {};
+            }
+            const guildId = ctx.guildId;
+            if (typeof guildId === "undefined") {
+                return {};
+            }
+            const guild = message.client.guilds.get(guildId);
+            if (typeof guild === "undefined") {
+                return {type: "error", error: `The bot is not part of ${guildId}.`};
+            }
+            return {guild: guild};
+        case 'text':
+            return {guild: message.guild};
+        default:
+            return {type: "error", error: `Unknown channel type: ${message.channel.type}.`};
+    }
+}
+
 export function runCommand(
     message: Message,
     commandText: string,
     admin: boolean,
-    commands: CommandStore,
-    textOut: (msg: string) => void) {
+    commandStore: CommandStore,
+    informUser: UserMessageCallback) {
     const argv = interpret(commandText);
     const memTag = message.channel.type == 'text'
         ? getMemTag(message.member)
         : `[${message.author.id}:${message.author.username}]`;
     console.log(memTag, 'EXEC', argv);
-    const informUser = textOut;
-    const cmd = commands[argv[0]];
+    const cmd = commandStore.commands[argv[0]];
     if (typeof cmd === "undefined") {
         informUser("Error: unknown command.");
         return;
@@ -315,8 +480,17 @@ export function runCommand(
         return;
     }
     const slicedArgs = argv.slice(1);
+
+    const computeGuildResult = computeGuild(commandStore.userContexts, message);
+
+    if (computeGuildResult.type === "error") {
+        informUser(`Error: ${computeGuildResult.error}`);
+        return;
+    }
+
     const cmdArgs: CommandArgs = {
         message: message,
+        guild: computeGuildResult.guild,
         argv: slicedArgs,
         isAdmin: admin,
         informUser: informUser
