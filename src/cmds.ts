@@ -247,7 +247,7 @@ export function createCommands(client: Client): CommandStore {
                 informUser('Roles:');
                 const roles = filteredRoles
                     .sort((a, b) => a.name.localeCompare(b.name))
-                    .map(r => `${r.name} (${r.id})`);
+                    .map(r => `\`${r.name}\` (${r.id})`);
                 roles.forEach(informUser);
             }
         },
@@ -291,7 +291,7 @@ export function createCommands(client: Client): CommandStore {
                             .map(roleId => guild.roles.get(roleId))
                             .filter(undefFilter)
                             .sort((a, b) => a.name.localeCompare(b.name))
-                            .map(r => `${r.name} (${r.id})`);
+                            .map(r => `\`${r.name}\` (${r.id})`);
                         roles.forEach(informUser);
                         return;
                     default:
