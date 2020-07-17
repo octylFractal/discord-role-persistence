@@ -1,30 +1,35 @@
 #!/usr/bin/env node
-import Discord, {Guild, GuildMember, Message} from "discord.js";
+import Discord, {Guild, GuildMember, Message, PartialGuildMember} from "discord.js";
 import {getAdmins, getPingNames, getToken, getUserName, getUserRoles, setProcessing} from "./db";
 import {captureInParens, indexOfSubseq, UserMessageCallback} from "./cmdsupport";
 import {COMMAND_PREFIX, createCommands, runCommand, sendMessage} from "./cmds";
 import {applyRoleForRejoin, getMemTag, guildMemberUpdate} from "./dbwrap";
 
-const client = new Discord.Client();
+const client = new Discord.Client({
+    partials: ['CHANNEL', 'GUILD_MEMBER', 'MESSAGE', 'USER']
+});
 
 
-function onJoinGuild(guild: Guild) {
-    guild.members.forEach(m => guildMemberUpdate(m));
+async function onJoinGuild(guild: Guild) {
+    console.log('Joined guild', guild.name, `(${guild.id})`);
+    const members = await guild.members.fetch();
+    members.forEach(m => guildMemberUpdate(m));
 }
 
 client.on('ready', () => {
     console.log('I am ready!');
-    client.guilds.forEach(g => onJoinGuild(g));
+    Promise.all(client.guilds.cache.map(guild => onJoinGuild(guild)))
+        .catch(err => console.warn(err));
 });
 
-client.on('guildCreate', guild => onJoinGuild(guild));
+client.on('guildCreate', guild => onJoinGuild(guild).catch(err => console.warn(err)));
 
-function onAddRoles(member: GuildMember): Promise<any> {
+async function onAddRoles(member: GuildMember): Promise<any[]> {
     const memTag = getMemTag(member);
     const roles = getUserRoles(member.user.id, member.guild.id);
     if (!roles) {
         console.log(memTag, 'No roles detected.');
-        return Promise.resolve();
+        return [];
     }
     console.log(memTag, 'Found some roles, applying...');
     return Promise.all(roles.map(r => {
@@ -36,7 +41,7 @@ function onAddRoles(member: GuildMember): Promise<any> {
 }
 
 function onAddName(member: GuildMember): Promise<void> {
-    if (!member.guild.member(client.user.id).hasPermission('MANAGE_NICKNAMES')) {
+    if (!member.guild.member(client.user!!.id)!!.hasPermission('MANAGE_NICKNAMES')) {
         return Promise.resolve();
     }
     const memTag = getMemTag(member);
@@ -58,22 +63,33 @@ function onAddName(member: GuildMember): Promise<void> {
 function processAddMember(member: GuildMember) {
     setProcessing(member.user.id, member.guild.id, true);
 
-    const promises: Promise<any>[] = [];
-    promises.push.apply(promises, onAddRoles(member));
-    promises.push(onAddName(member));
-
-    Promise.all(promises)
-        .then(() => setProcessing(member.user.id, member.guild.id, false));
+    Promise.all([onAddRoles(member), onAddName(member)])
+        .then(() => setProcessing(member.user.id, member.guild.id, false))
+        .catch(err => console.warn(err));
 }
 
-client.on('guildMemberAdd', member => {
+async function unpartializeMember(member: GuildMember | PartialGuildMember): Promise<GuildMember> {
+    if (member.partial) {
+        return member.fetch();
+    }
+    return member;
+}
+
+async function onGuildMemberAdd(member: GuildMember | PartialGuildMember) {
+    member = await unpartializeMember(member);
     const memTag = getMemTag(member);
     console.log(memTag, 'Joined guild.');
     processAddMember(member);
+}
+
+client.on('guildMemberAdd', member => {
+    onGuildMemberAdd(member).catch(err => console.warn(err));
 });
 
 client.on('guildMemberUpdate', (old, member) => {
-    guildMemberUpdate(member);
+    unpartializeMember(member)
+        .then(member => guildMemberUpdate(member))
+        .catch(err => console.warn(err));
 });
 
 
@@ -81,8 +97,8 @@ const commands = createCommands(client);
 const CMD_START_RE = /^[a-zA-Z]/;
 type CommandsByName = Record<string, string>;
 
-function callCommand(message: Message, commandText: string, commandOutput: UserMessageCallback) {
-    runCommand(message,
+async function callCommand(message: Message, commandText: string, commandOutput: UserMessageCallback) {
+    await runCommand(message,
         commandText,
         getAdmins().indexOf(message.author.id) >= 0,
         commands,
@@ -144,7 +160,7 @@ function extractCommands(text: string): CommandsByName {
     }
 }
 
-function execAllCommands(message: Message, commands: CommandsByName) {
+async function execAllCommands(message: Message, commands: CommandsByName) {
     const replyMessage: Promise<string>[] = [];
     for (const cmdName of Object.keys(commands)) {
         const cmd = commands[cmdName];
@@ -155,45 +171,58 @@ function execAllCommands(message: Message, commands: CommandsByName) {
             replyMessage.push(fullMessage);
         };
 
-        callCommand(message, cmd, commandOutput);
+        await callCommand(message, cmd, commandOutput);
     }
     if (replyMessage.length > 0) {
-        Promise.all(replyMessage)
-            .then(messages => {
-                sendMessage(message.channel, messages.join('\n'));
-            })
-            .catch(err => console.error("Error waiting for messages", err));
+        let messages: string[]
+        try {
+            messages = await Promise.all(replyMessage);
+        } catch (e) {
+            console.error("Error waiting for messages", e);
+            return;
+        }
+        await sendMessage(message.channel, messages.join('\n'));
     }
 }
 
 
-client.on('message', message => {
-    if (message.author.id === client.user.id) {
+async function onMessage(message: Discord.Message) {
+    if (message.author.id === client.user?.id) {
         // don't reply-self
         return;
     }
     const text = message.content;
     const commands = extractCommands(text);
-    execAllCommands(message, commands);
+    await execAllCommands(message, commands);
     const executedCommands = Object.keys(commands).length > 0;
     if (!executedCommands && message.channel.type === 'dm') {
         // bonus treats
-        sendMessage(message.channel, `Oh hai ${message.author.username}!`);
+        await sendMessage(message.channel, `Oh hai ${message.author.username}!`);
         return;
     } else if (message.channel.type === "text") {
-        if (!message.member.hasPermission('MENTION_EVERYONE', false, true, true)) {
+        if (!message.member?.hasPermission('MENTION_EVERYONE', {
+            checkAdmin: true,
+            checkOwner: true,
+        })) {
             return;
         }
         const pingRoles = getPingNames();
         const matches = message.mentions.roles.filter(r => pingRoles.indexOf(r.name) >= 0)
-            .filter(r => r.members.has(client.user.id))
+            .filter(r => r.members.has(client.user!.id))
             .array();
         if (matches.length) {
-            message.channel
-                .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`)
-                .catch(err => console.error("Error @everyone'in", err));
+            try {
+                await message.channel
+                    .send(`Listen up ${matches[0].name}, ${message.member.displayName} has something really important to say! (@everyone)`);
+            } catch (e) {
+                console.error("Error @everyone'in", e);
+            }
         }
     }
+}
+
+client.on('message', message => {
+    onMessage(message).catch(err => console.warn("Error in onMessage", err))
 });
 
 client.login(getToken())

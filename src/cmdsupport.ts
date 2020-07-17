@@ -309,10 +309,10 @@ export interface ValidRoles {
     roles: Role[]
 }
 
-export function validateRoles({
+export async function validateRoles({
                                   client, gId, roleIds, roleFilter = () => true, informUser
-                              }: ValidateRolesArgs): ValidRoles | undefined {
-    const guild = client.guilds.get(gId);
+                              }: ValidateRolesArgs): Promise<ValidRoles | undefined> {
+    const guild = client.guilds.cache.get(gId);
     if (typeof guild === "undefined") {
         informUser("Error: bot does not exist in guild");
         return undefined;
@@ -320,8 +320,8 @@ export function validateRoles({
     const roles = guild.roles;
     const roleOut: Role[] = [];
     for (const r of roleIds) {
-        const role = roles.get(r);
-        if (typeof role === "undefined" || !roleFilter(r)) {
+        const role = await roles.fetch(r);
+        if (role === null || !roleFilter(r)) {
             informUser(`Warning: role ${r} not found in guild or not visible.`);
             return undefined;
         }
@@ -339,6 +339,10 @@ export function generateRoleList({roles}: ValidRoles): string {
 
 export function undefFilter<T>(t: T | undefined): t is T {
     return typeof t !== "undefined";
+}
+
+export function nullFilter<T>(t: T | null): t is T {
+    return t !== null;
 }
 
 export type PromisedString = string | PromiseLike<string>;

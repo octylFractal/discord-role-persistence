@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
 set -e
-./node_modules/.bin/tsc
+./node_modules/.bin/tsc --incremental
 
-nodejs ./dist/index.js
+node ./dist/index.js

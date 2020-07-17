@@ -12,15 +12,19 @@ export function guildMemberUpdate(member: GuildMember) {
         return;
     }
 
-    const roles = member.roles.array();
+    const roles = member.roles.cache.array();
     console.log(memTag, 'Saving roles:', roles.map(r => ({
         id: r.id,
         name: r.name
     })));
     setUserRoles(member.user.id, member.guild.id, roles.map(r => r.id));
 
-    console.log(memTag, 'Saving name:', member.nickname);
-    setUserName(member.user.id, member.guild.id, member.nickname);
+    const nickname = member.nickname;
+    // extra undefined check while https://github.com/discordjs/discord.js/issues/4640 is open
+    if (nickname !== undefined && nickname !== null) {
+        console.log(memTag, 'Saving name:', nickname);
+        setUserName(member.user.id, member.guild.id, nickname);
+    }
 }
 
 export type RoleFilter = (roleId: Snowflake) => boolean;
@@ -28,7 +32,7 @@ export type RoleFilter = (roleId: Snowflake) => boolean;
 export function applyRole(member: GuildMember, roleId: Snowflake, reason: string): Promise<void> {
     const memTag = getMemTag(member);
 
-    return member.addRole(roleId, 'role-persistence: ' + reason)
+    return member.roles.add(roleId, 'role-persistence: ' + reason)
         .then(() => console.log(memTag, 'Applied', roleId))
         .catch(err => {
             console.error(memTag, 'Failed to add role:', err);
@@ -39,7 +43,7 @@ export function applyRole(member: GuildMember, roleId: Snowflake, reason: string
 export function removeRole(member: GuildMember, roleId: Snowflake, reason: string): Promise<void> {
     const memTag = getMemTag(member);
 
-    return member.removeRole(roleId, 'role-persistence: ' + reason)
+    return member.roles.remove(roleId, 'role-persistence: ' + reason)
         .then(() => console.log(memTag, 'Removed', roleId))
         .catch(err => {
             console.error(memTag, 'Failed to remove role:', err);
@@ -47,14 +51,14 @@ export function removeRole(member: GuildMember, roleId: Snowflake, reason: strin
         });
 }
 
-export function applyRoleForRejoin(member: GuildMember, roleId: Snowflake): Promise<void> {
+export async function applyRoleForRejoin(member: GuildMember, roleId: Snowflake): Promise<void> {
     const memTag = getMemTag(member);
     const roleMap = getRoleMapppings(member.guild.id);
     if (roleMap && roleMap[roleId]) {
         console.log(memTag, 'Mapping role', roleId, 'to', roleMap[roleId]);
         roleId = roleMap[roleId];
     }
-    let roleObj = member.guild.roles.get(roleId);
+    let roleObj = await member.guild.roles.fetch(roleId);
     // exclude these roles:
     if (
         // dropped role:
@@ -62,7 +66,7 @@ export function applyRoleForRejoin(member: GuildMember, roleId: Snowflake): Prom
         // @everyone role:
         || roleId === member.guild.id
         // non-existent role:
-        || typeof roleObj === "undefined"
+        || roleObj === null
         // managed role:
         || roleObj.managed
     ) {

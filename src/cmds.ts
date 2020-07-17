@@ -4,10 +4,10 @@ import {
     descriptions,
     generateRoleList,
     interpret,
+    nullFilter,
     OPTIONAL,
     REQUIRED,
     requireGuild,
-    undefFilter,
     userHumanId,
     UserMessageCallback,
     validateRoles,
@@ -20,8 +20,8 @@ import moment = require("moment-timezone");
 
 export const COMMAND_PREFIX = '.';
 
-export function sendMessage(target: PartialTextBasedChannelFields, message: StringResolvable) {
-    target.send(message).catch(err => console.warn('Error sending message to', target, err));
+export async function sendMessage(target: PartialTextBasedChannelFields, message: StringResolvable) {
+    await target.send(message).catch(err => console.warn('Error sending message to', target, err));
 }
 
 const HUMAN_FORMAT = 'HH:mm, MMM Do, YYYY';
@@ -109,7 +109,7 @@ interface Command {
     requiresAdmin: boolean
     description: CommandDescription
 
-    run(commandArgs: CommandArgs): void
+    run(commandArgs: CommandArgs): void | Promise<void>
 }
 
 const FORMAT_ARG_TABLE: Record<string, string> = {
@@ -149,8 +149,9 @@ export function createCommands(client: Client): CommandStore {
         }
 
         const member = guild.member(uid);
-        if (typeof member === "undefined") {
-            informUser(`Error: unknown user ${uid}.`)
+        if (member === null) {
+            informUser(`Error: unknown user ${uid}.`);
+            return;
         }
 
         switch (action) {
@@ -183,7 +184,7 @@ export function createCommands(client: Client): CommandStore {
                 desc.r('guildId')
             ),
             run({message, argv: [gId], informUser}) {
-                if (!client.guilds.has(gId)) {
+                if (!client.guilds.cache.has(gId)) {
                     informUser("Error: bot is not in that guild.");
                     return;
                 }
@@ -201,16 +202,19 @@ export function createCommands(client: Client): CommandStore {
                 desc.r('fromRole'),
                 desc.r('toRole')
             ),
-            run({guild, argv: [from, to], informUser}) {
+            async run({guild, argv: [from, to], informUser}) {
                 if (!requireGuild(guild, informUser)) {
                     return;
                 }
-                const roles = guild.roles;
-                if (!roles.has(from)) {
+                const [fromResolved, toResolved] = await Promise.all([
+                    guild.roles.fetch(from),
+                    guild.roles.fetch(to),
+                ]);
+                if (fromResolved === null) {
                     informUser("Error: `from` role does not exist in guild");
                     return;
                 }
-                if (!roles.has(to) && to !== '0') {
+                if (toResolved === null && to !== '0') {
                     informUser("Error: `to` role does not exist in guild");
                     return;
                 }
@@ -223,7 +227,7 @@ export function createCommands(client: Client): CommandStore {
             description: descriptions(),
             run({informUser}) {
                 informUser('Guilds:');
-                informUser(client.guilds
+                informUser(client.guilds.cache
                     .sort((a, b) => a.name.localeCompare(b.name))
                     .map(g => `${g.name} (${g.id})`)
                     .join('\n'));
@@ -238,7 +242,7 @@ export function createCommands(client: Client): CommandStore {
                     return;
                 }
                 const roleFilter = isAdmin ? () => true : unmoderatedRoleFilter(guild.id);
-                const filteredRoles = guild.roles
+                const filteredRoles = guild.roles.cache
                     .filter(role => roleFilter(role.id));
                 if (filteredRoles.size == 0) {
                     informUser('There are no roles visible to you.');
@@ -257,11 +261,11 @@ export function createCommands(client: Client): CommandStore {
                 desc.c('action', REQUIRED, ['add', 'remove', 'list']),
                 desc.o('roleIds...')
             ),
-            run({guild, argv: [action, ...roleIds], isAdmin, informUser}) {
+            async run({guild, argv: [action, ...roleIds], isAdmin, informUser}) {
                 if (!requireGuild(guild, informUser)) {
                     return;
                 }
-                const validation = validateRoles({
+                const validation = await validateRoles({
                     client: client,
                     gId: guild.id,
                     roleIds: roleIds,
@@ -285,11 +289,12 @@ export function createCommands(client: Client): CommandStore {
                         informUser(`Removed ${roleList} from unmoderated roles.`);
                         break;
                     case 'list':
+                        console.log("listing roles")
                         informUser(`Current unmoderated roles:`);
 
-                        const roles = unmodRoles
-                            .map(roleId => guild.roles.get(roleId))
-                            .filter(undefFilter)
+                        const resolvedRoles = await Promise.all(unmodRoles.map(roleId => guild.roles.fetch(roleId)));
+                        const roles = resolvedRoles
+                            .filter(nullFilter)
                             .sort((a, b) => a.name.localeCompare(b.name))
                             .map(r => `\`${r.name}\` (${r.id})`);
                         roles.forEach(informUser);
@@ -389,7 +394,7 @@ export function createCommands(client: Client): CommandStore {
         help: {
             requiresAdmin: false,
             description: descriptions(),
-            run({message, isAdmin}) {
+            async run({message, isAdmin}) {
                 const auth = message.author;
                 const reply: String[] = ['Commands:'];
                 for (let k of Object.keys(commands)) {
@@ -399,11 +404,11 @@ export function createCommands(client: Client): CommandStore {
                     }
                     let cmdDesc = `\`${COMMAND_PREFIX}${k} ${cmd.description.describe()}\``;
                     if (cmd.requiresAdmin) {
-                        cmdDesc += ` -- requires ${client.user.username} admin!`
+                        cmdDesc += ` -- requires ${client.user!!.username} admin!`
                     }
                     reply.push(cmdDesc);
                 }
-                auth.send(reply.join('\n'));
+                await auth.send(reply.join('\n'));
             }
         }
     };
@@ -438,7 +443,6 @@ type ComputeGuildError = { type: "error", error: string };
 function computeGuild(userCtxs: UserContexts, message: Message): ComputeGuildValid | ComputeGuildError {
     switch (message.channel.type) {
         case 'dm':
-        case 'group':
             const ctx = userCtxs[message.author.id];
             if (typeof ctx === "undefined") {
                 return {};
@@ -447,19 +451,19 @@ function computeGuild(userCtxs: UserContexts, message: Message): ComputeGuildVal
             if (typeof guildId === "undefined") {
                 return {};
             }
-            const guild = message.client.guilds.get(guildId);
+            const guild = message.client.guilds.cache.get(guildId);
             if (typeof guild === "undefined") {
                 return {type: "error", error: `The bot is not part of ${guildId}.`};
             }
             return {guild: guild};
         case 'text':
-            return {guild: message.guild};
+            return {guild: message.guild === null ? undefined : message.guild};
         default:
             return {type: "error", error: `Unknown channel type: ${message.channel.type}.`};
     }
 }
 
-export function runCommand(
+export async function runCommand(
     message: Message,
     commandText: string,
     admin: boolean,
@@ -467,7 +471,7 @@ export function runCommand(
     informUser: UserMessageCallback) {
     const argv = interpret(commandText);
     const memTag = message.channel.type == 'text'
-        ? getMemTag(message.member)
+        ? getMemTag(message.member!!)
         : `[${message.author.id}:${message.author.username}]`;
     console.log(memTag, 'EXEC', argv);
     const cmd = commandStore.commands[argv[0]];
@@ -498,5 +502,5 @@ export function runCommand(
     if (!validateCommand(cmd, cmdArgs)) {
         return;
     }
-    cmd.run(cmdArgs);
+    await cmd.run(cmdArgs);
 }
