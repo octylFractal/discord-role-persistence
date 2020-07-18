@@ -5,10 +5,14 @@ import {captureInParens, indexOfSubseq, UserMessageCallback} from "./cmdsupport"
 import {COMMAND_PREFIX, createCommands, runCommand, sendMessage} from "./cmds";
 import {applyRoleForRejoin, getMemTag, guildMemberUpdate} from "./dbwrap";
 
+import 'make-promises-safe';
+
 const client = new Discord.Client({
     partials: ['CHANNEL', 'GUILD_MEMBER', 'MESSAGE', 'USER']
 });
 
+client.on('warn', warn => console.warn(warn));
+client.on('error', error => console.warn(error));
 
 async function onJoinGuild(guild: Guild) {
     console.log('Joined guild', guild.name, `(${guild.id})`);
